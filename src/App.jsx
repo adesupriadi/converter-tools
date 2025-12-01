@@ -1,8 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 
-// Pastikan index.html memuat script FFmpeg v0.12:
-// <script src="https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.js"></script>
-// <script src="https://unpkg.com/@ffmpeg/util@0.12.1/dist/umd/index.js"></script>
+// Pastikan index.html memuat script FFmpeg v0.10.1
 
 function App() {
   const [statusTitle, setStatusTitle] = useState('Menunggu Koneksi...');
@@ -22,39 +20,21 @@ function App() {
 
   const initEngine = async () => {
     try {
-      // Cek Library v0.12
-      if (!window.FFmpegWASM || !window.FFmpegUtil) {
+      if (!window.FFmpeg) {
         setStatusTitle("Gagal Memuat Sistem");
-        setStatusDesc("Script FFmpeg v0.12 tidak ditemukan. Cek index.html");
+        setStatusDesc("Script FFmpeg tidak ditemukan di index.html");
         setIsError(true);
         return;
       }
 
-      setStatusTitle('Memanaskan Mesin Modern...');
-      setStatusDesc('Sedang menyiapkan Single-Threaded Engine.');
+      setStatusTitle('Memanaskan Mesin...');
+      setStatusDesc('Sedang menyiapkan FFmpeg di browser Anda.');
       
-      const { FFmpeg } = window.FFmpegWASM;
-      const { toBlobURL } = window.FFmpegUtil;
-      
-      const ffmpeg = new FFmpeg();
+      const { createFFmpeg } = window.FFmpeg;
+      const ffmpeg = createFFmpeg({ log: true }); 
       ffmpegRef.current = ffmpeg;
 
-      ffmpeg.on('log', ({ message }) => console.log(message));
-      
-      // Progress bar asli dari v0.12
-      ffmpeg.on('progress', ({ progress }) => {
-          setProgress(Math.round(progress * 100));
-      });
-
-      // LOAD ENGINE LANGSUNG DARI CDN (TANPA BLOB)
-      // Versi 0.12 Single Threaded (@ffmpeg/core) biasanya aman di Netlify tanpa Blob
-      // Jika ini gagal, baru kita pikirkan cara lain. Tapi ini cara standar v0.12.
-      const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd';
-      
-      await ffmpeg.load({
-        coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
-        wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
-      });
+      await ffmpeg.load();
       
       setStatusTitle('Converter Siap!');
       setStatusDesc('Menunggu kiriman file otomatis dari tab sebelah...');
@@ -65,6 +45,7 @@ function App() {
 
       window.addEventListener('message', handleIncomingFile);
 
+      // Timeout 10 detik jika tidak ada file masuk
       timeoutRef.current = setTimeout(() => {
           setStatusTitle('⚠️ KONEKSI GAGAL');
           setStatusDesc('Waktu habis. File tidak masuk otomatis. Silakan upload manual di bawah.');
@@ -74,7 +55,7 @@ function App() {
     } catch (err) {
       console.error(err);
       setStatusTitle('Gagal Inisialisasi');
-      setStatusDesc('Error: ' + (err.message || "Cek Koneksi Internet"));
+      setStatusDesc('Terjadi kesalahan saat memuat engine converter.');
       setIsError(true);
     }
   };
@@ -103,42 +84,54 @@ function App() {
     setStatusDesc('Mohon jangan tutup tab ini.');
 
     const ffmpeg = ffmpegRef.current;
-    
-    // PERBAIKAN UTAMA: AMBIL fetchFile DARI TEMPAT YANG BENAR
-    const { fetchFile } = window.FFmpegUtil; // <--- INI PERBAIKANNYA
+    const { fetchFile } = window.FFmpeg;
+
+    const timer = setInterval(() => {
+        setProgress((old) => {
+            if (old >= 90) return 90;
+            return old + 5;
+        });
+    }, 500);
 
     try {
-        // Tulis File
-        await ffmpeg.writeFile('input.webm', await fetchFile(blob));
-        
-        // Convert (v0.12 Syntax)
-        await ffmpeg.exec(['-i', 'input.webm', '-c:v', 'libx264', '-preset', 'ultrafast', 'output.mp4']);
-        
-        // Baca Hasil
-        const data = await ffmpeg.readFile('output.mp4');
+        ffmpeg.FS('writeFile', 'input.webm', await fetchFile(blob));
+        await ffmpeg.run('-i', 'input.webm', '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '28', 'output.mp4');
+        const data = ffmpeg.FS('readFile', 'output.mp4');
         const mp4Url = URL.createObjectURL(new Blob([data.buffer], { type: 'video/mp4' }));
 
-        triggerDownload(mp4Url, `${filename}.mp4`);
+        triggerDownload(mp4Url, `${filename}-converted.mp4`);
 
+        try {
+            ffmpeg.FS('unlink', 'input.webm');
+            ffmpeg.FS('unlink', 'output.mp4');
+        } catch(e) {}
+
+        clearInterval(timer);
         setIsConverting(false);
         setProgress(100);
         setIsSuccess(true);
         setStatusTitle('Selesai!');
         
-        setStatusDesc('Tab ini akan tertutup otomatis dalam 3 detik...');
+        // --- LOGIKA AUTO CLOSE (Revisi Tambahan) ---
+        // Memberi waktu 3 detik agar download berjalan, lalu mencoba menutup tab
         setTimeout(() => {
             try {
-                if (window.opener && !window.opener.closed) window.opener.focus();
-            } catch (e) {}
-            window.close();
+                if (window.opener && !window.opener.closed) {
+                    window.opener.focus(); // Fokus kembali ke Shortnews
+                }
+            } catch (e) { /* Ignore cross-origin error */ }
+            
+            window.close(); // Tutup tab Converter
         }, 3000);
+        // -------------------------------------------
 
     } catch (err) {
+        clearInterval(timer);
         console.error(err);
         setIsConverting(false);
         setIsError(true);
         setStatusTitle('Gagal Konversi');
-        setStatusDesc('Terjadi kesalahan. Cek Console.');
+        setStatusDesc('Terjadi kesalahan saat memproses video.');
     }
   };
 
@@ -172,15 +165,22 @@ function App() {
             <h1 style={{...styles.title, color: isError ? '#d32f2f' : isSuccess ? '#2e7d32' : '#333'}}>
                 {statusTitle}
             </h1>
+            
             <p style={styles.description}>
                 {isSuccess ? (
                     <span>
                         File MP4 berhasil diunduh. <br/>
-                        <span onClick={backToShortnews} style={styles.blinkingLink} className="blink-anim">
+                        <span 
+                            onClick={backToShortnews} 
+                            style={styles.blinkingLink}
+                            className="blink-anim"
+                        >
                             Klik di sini untuk Kembali ke Shortnews
                         </span>
                     </span>
-                ) : ( statusDesc )}
+                ) : (
+                    statusDesc
+                )}
             </p>
 
             {isConverting && (
@@ -213,7 +213,10 @@ function App() {
             )}
 
             {isSuccess && (
-                <button onClick={() => { setIsSuccess(false); setStatusTitle('Siap Convert Lagi'); setStatusDesc('Silakan upload file baru.'); setProgress(0); setIsError(false); }} style={styles.resetButton}>
+                <button 
+                    onClick={() => { setIsSuccess(false); setStatusTitle('Siap Convert Lagi'); setStatusDesc('Silakan upload file baru.'); setProgress(0); setIsError(false); }}
+                    style={styles.resetButton}
+                >
                     🔄 Convert Video Lain
                 </button>
             )}
