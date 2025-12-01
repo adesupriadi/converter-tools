@@ -31,8 +31,14 @@ function App() {
       setStatusDesc('Sedang menyiapkan FFmpeg di browser Anda.');
       
       const { createFFmpeg } = window.FFmpeg;
-      // log: true untuk debugging, bisa diubah false saat produksi
-      const ffmpeg = createFFmpeg({ log: true }); 
+      
+      // GUNAKAN CORE v0.9.0 (Pasangan v0.9.8)
+      // Ini versi paling stabil untuk Single Thread
+      const ffmpeg = createFFmpeg({ 
+        log: true,
+        corePath: 'https://unpkg.com/@ffmpeg/core@0.9.0/dist/ffmpeg-core.js'
+      }); 
+      
       ffmpegRef.current = ffmpeg;
 
       await ffmpeg.load();
