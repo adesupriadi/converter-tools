@@ -20,40 +20,50 @@ function App() {
 
   const initEngine = async () => {
     try {
-      if (!window.FFmpeg) {
+      // Cek Library v0.12
+      if (!window.FFmpegWASM) {
         setStatusTitle("Gagal Memuat Sistem");
-        setStatusDesc("Script FFmpeg tidak ditemukan di index.html");
+        setStatusDesc("Script FFmpeg v0.12 tidak ditemukan. Cek index.html");
         setIsError(true);
         return;
       }
 
-      setStatusTitle('Memanaskan Mesin...');
-      setStatusDesc('Sedang menyiapkan FFmpeg di browser Anda.');
+      setStatusTitle('Memanaskan Mesin Modern...');
+      setStatusDesc('Sedang menyiapkan Single-Threaded Engine.');
       
-      const { createFFmpeg } = window.FFmpeg;
+      const { FFmpeg } = window.FFmpegWASM;
+      const { toBlobURL } = window.FFmpegUtil;
       
-      // GUNAKAN CORE v0.9.0 (Pasangan v0.9.8)
-      // Ini versi paling stabil untuk Single Thread
-      const ffmpeg = createFFmpeg({ 
-        log: true,
-        corePath: 'https://unpkg.com/@ffmpeg/core@0.9.0/dist/ffmpeg-core.js'
-      }); 
-      
+      const ffmpeg = new FFmpeg();
       ffmpegRef.current = ffmpeg;
 
-      await ffmpeg.load();
+      ffmpeg.on('log', ({ message }) => console.log(message));
+
+      // URL Sumber Daya
+      const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd';
+      const workerURLSource = 'https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/umd/814.ffmpeg.js';
+
+      // DOWNLOAD DAN UBAH JADI BLOB LOKAL (BYPASS CORS NETLIFY)
+      const coreURL = await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript');
+      const wasmURL = await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm');
+      const workerURL = await toBlobURL(workerURLSource, 'text/javascript');
+
+      // Load dengan konfigurasi Single Threaded (tanpa worker tambahan)
+      await ffmpeg.load({
+        coreURL: coreURL,
+        wasmURL: wasmURL,
+        classWorkerURL: workerURL, // Ini kunci supaya worker tidak error 403/CORS
+      });
       
       setStatusTitle('Converter Siap!');
       setStatusDesc('Menunggu kiriman file otomatis dari tab sebelah...');
 
-      // Kabari tab Shortnews bahwa converter sudah siap
       if (window.opener) {
         try { window.opener.postMessage('CONVERTER_READY', '*'); } catch (e) {}
       }
 
       window.addEventListener('message', handleIncomingFile);
 
-      // Timeout 10 detik jika tidak ada file masuk otomatis
       timeoutRef.current = setTimeout(() => {
           setStatusTitle('⚠️ KONEKSI GAGAL');
           setStatusDesc('Waktu habis. File tidak masuk otomatis. Silakan upload manual di bawah.');
@@ -63,7 +73,7 @@ function App() {
     } catch (err) {
       console.error(err);
       setStatusTitle('Gagal Inisialisasi');
-      setStatusDesc('Terjadi kesalahan saat memuat engine converter.');
+      setStatusDesc('Error: ' + (err.message || JSON.stringify(err)));
       setIsError(true);
     }
   };
