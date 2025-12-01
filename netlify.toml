@@ -1,4 +1,12 @@
+# 1. Agar React Router tidak Error 404
 [[redirects]]
   from = "/*"
   to = "/index.html"
   status = 200
+
+# 2. AGAR SAMA DENGAN VITE CONFIG YANG BERHASIL (Header Keamanan)
+[[headers]]
+  for = "/*"
+  [headers.values]
+    Cross-Origin-Embedder-Policy = "require-corp"
+    Cross-Origin-Opener-Policy = "same-origin"
