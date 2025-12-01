@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 
-// Pastikan index.html memuat script FFmpeg v0.10.1
+// Pastikan index.html memuat script FFmpeg v0.10.1 di folder public/index.html
 
 function App() {
   const [statusTitle, setStatusTitle] = useState('Menunggu Koneksi...');
@@ -31,6 +31,7 @@ function App() {
       setStatusDesc('Sedang menyiapkan FFmpeg di browser Anda.');
       
       const { createFFmpeg } = window.FFmpeg;
+      // log: true untuk debugging, bisa diubah false saat produksi
       const ffmpeg = createFFmpeg({ log: true }); 
       ffmpegRef.current = ffmpeg;
 
@@ -39,13 +40,14 @@ function App() {
       setStatusTitle('Converter Siap!');
       setStatusDesc('Menunggu kiriman file otomatis dari tab sebelah...');
 
+      // Kabari tab Shortnews bahwa converter sudah siap
       if (window.opener) {
         try { window.opener.postMessage('CONVERTER_READY', '*'); } catch (e) {}
       }
 
       window.addEventListener('message', handleIncomingFile);
 
-      // Timeout 10 detik jika tidak ada file masuk
+      // Timeout 10 detik jika tidak ada file masuk otomatis
       timeoutRef.current = setTimeout(() => {
           setStatusTitle('⚠️ KONEKSI GAGAL');
           setStatusDesc('Waktu habis. File tidak masuk otomatis. Silakan upload manual di bawah.');
@@ -62,6 +64,7 @@ function App() {
 
   const handleIncomingFile = async (event) => {
     if (event.data && event.data.type === 'VIDEO_DATA') {
+        // Matikan timer karena file sudah masuk
         clearTimeout(timeoutRef.current);
         const { blob, filename } = event.data;
         processVideo(blob, filename);
@@ -86,6 +89,7 @@ function App() {
     const ffmpeg = ffmpegRef.current;
     const { fetchFile } = window.FFmpeg;
 
+    // Simulasi progress bar (karena v0.10.1 single thread memblokir update real-time)
     const timer = setInterval(() => {
         setProgress((old) => {
             if (old >= 90) return 90;
@@ -94,13 +98,20 @@ function App() {
     }, 500);
 
     try {
+        // 1. Tulis File
         ffmpeg.FS('writeFile', 'input.webm', await fetchFile(blob));
+        
+        // 2. Jalankan Konversi
         await ffmpeg.run('-i', 'input.webm', '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '28', 'output.mp4');
+        
+        // 3. Baca Hasil
         const data = ffmpeg.FS('readFile', 'output.mp4');
         const mp4Url = URL.createObjectURL(new Blob([data.buffer], { type: 'video/mp4' }));
 
+        // 4. Download
         triggerDownload(mp4Url, `${filename}-converted.mp4`);
 
+        // 5. Bersihkan Memori
         try {
             ffmpeg.FS('unlink', 'input.webm');
             ffmpeg.FS('unlink', 'output.mp4');
@@ -112,18 +123,18 @@ function App() {
         setIsSuccess(true);
         setStatusTitle('Selesai!');
         
-        // --- LOGIKA AUTO CLOSE (Revisi Tambahan) ---
-        // Memberi waktu 3 detik agar download berjalan, lalu mencoba menutup tab
+        // --- LOGIKA AUTO CLOSE & AUTO FOCUS ---
+        setStatusDesc('Tab ini akan tertutup otomatis dalam 3 detik...');
         setTimeout(() => {
             try {
                 if (window.opener && !window.opener.closed) {
-                    window.opener.focus(); // Fokus kembali ke Shortnews
+                    window.opener.focus(); // Kembali ke Shortnews
                 }
-            } catch (e) { /* Ignore cross-origin error */ }
+            } catch (e) { console.log("Auto-focus diblokir browser"); }
             
             window.close(); // Tutup tab Converter
         }, 3000);
-        // -------------------------------------------
+        // -------------------------------------
 
     } catch (err) {
         clearInterval(timer);
