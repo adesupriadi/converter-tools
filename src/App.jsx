@@ -35,34 +35,39 @@ function App() {
     try {
       if (!window.FFmpeg) {
         setStatusTitle("Gagal Memuat Sistem");
-        setStatusDesc("Script FFmpeg tidak ditemukan.");
+        setStatusDesc("Script FFmpeg hilang. Cek index.html");
         setIsError(true);
         return;
       }
 
       setStatusTitle('Memanaskan Mesin...');
+      setStatusDesc('Sedang menyiapkan mesin (v0.9.8)...');
+      
       const { createFFmpeg } = window.FFmpeg;
+      
+      // INI KUNCINYA: PAKAI CORE VERSI 0.9.0
       const ffmpeg = createFFmpeg({ 
         log: true,
-        corePath: 'https://unpkg.com/@ffmpeg/core@0.10.0/dist/ffmpeg-core.js'
+        corePath: 'https://unpkg.com/@ffmpeg/core@0.9.0/dist/ffmpeg-core.js'
       }); 
       
       ffmpegRef.current = ffmpeg;
       await ffmpeg.load();
       
       setIsReady(true);
-      setStatusTitle('Converter Ready!');
-      setStatusDesc('Upload banyak file sekaligus? Bisa!');
+      setStatusTitle('WEBM2MP4 SIAP'); 
+      setStatusDesc('Silakan upload video Anda.');
 
+      // Komunikasi antar tab (Opsional/Bonus)
       if (window.opener) {
         try { window.opener.postMessage('CONVERTER_READY', '*'); } catch (e) {}
       }
-
       window.addEventListener('message', handleIncomingFile);
 
     } catch (err) {
       console.error(err);
       setStatusTitle('Gagal Inisialisasi');
+      setStatusDesc('Browser memblokir mesin. Coba gunakan Chrome versi Desktop.');
       setIsError(true);
     }
   };
