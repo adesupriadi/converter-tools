@@ -1,14 +1,18 @@
 import { useState, useRef, useEffect } from 'react';
 
-// Pastikan index.html memuat script FFmpeg v0.10.1 di folder public
+// Pastikan index.html memuat script FFmpeg v0.10.1
 
 function App() {
-  const [isReady, setIsReady] = useState(false);
-  const [status, setStatus] = useState('Memuat Mesin...');
+  const [statusTitle, setStatusTitle] = useState('Menunggu Koneksi...');
+  const [statusDesc, setStatusDesc] = useState('Siap menerima video dari Shortnews.');
+  
+  // State untuk Multi-File
+  const [queue, setQueue] = useState([]); // Format: { id, file, status: 'pending'|'processing'|'done'|'error', name }
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [currentFileIndex, setCurrentFileIndex] = useState(0);
   const [progress, setProgress] = useState(0);
-  const [isConverting, setIsConverting] = useState(false);
+  const [isReady, setIsReady] = useState(false);
   const [isError, setIsError] = useState(false);
-  const [isSuccess, setIsSuccess] = useState(false);
   
   const ffmpegRef = useRef(null);
 
@@ -16,18 +20,24 @@ function App() {
     initEngine();
   }, []);
 
+  // TRIGGER PROSES OTOMATIS JIKA ADA ANTRIAN BARU
+  useEffect(() => {
+    if (isReady && queue.length > 0 && !isProcessing) {
+        processQueue();
+    }
+  }, [queue, isReady, isProcessing]);
+
   const initEngine = async () => {
     try {
       if (!window.FFmpeg) {
-        setStatus("Error: Script FFmpeg tidak ditemukan.");
+        setStatusTitle("Gagal Memuat Sistem");
+        setStatusDesc("Script FFmpeg tidak ditemukan.");
         setIsError(true);
         return;
       }
-      
+
+      setStatusTitle('Memanaskan Mesin...');
       const { createFFmpeg } = window.FFmpeg;
-      
-      // Load dari CDN agar aman di Netlify
-      // Kita paksa path core ke versi 0.10.0 yang stabil
       const ffmpeg = createFFmpeg({ 
         log: true,
         corePath: 'https://unpkg.com/@ffmpeg/core@0.10.0/dist/ffmpeg-core.js'
@@ -36,225 +46,225 @@ function App() {
       ffmpegRef.current = ffmpeg;
       await ffmpeg.load();
       
-      // Mesin siap, langsung tampilkan UI Upload
       setIsReady(true);
-      setStatus('WEBM2MP4 SIAP'); 
+      setStatusTitle('Converter Ready!');
+      setStatusDesc('Upload banyak file sekaligus? Bisa!');
+
+      if (window.opener) {
+        try { window.opener.postMessage('CONVERTER_READY', '*'); } catch (e) {}
+      }
+
+      window.addEventListener('message', handleIncomingFile);
 
     } catch (err) {
       console.error(err);
-      setStatus('Gagal Memuat Mesin. Cek Koneksi Internet.');
+      setStatusTitle('Gagal Inisialisasi');
       setIsError(true);
     }
   };
 
-  const handleManualUpload = (e) => {
-      const file = e.target.files[0];
-      if (!file) return;
-      
-      // Reset state jika sebelumnya sukses/error
-      setIsSuccess(false); 
-      setIsError(false);
-      
-      // Mulai proses
-      processVideo(file, file.name.replace(/\.[^/.]+$/, "")); 
+  const handleIncomingFile = async (event) => {
+    if (event.data && event.data.type === 'VIDEO_DATA') {
+        const { blob, filename } = event.data;
+        // Masukkan ke antrian sebagai File object
+        const file = new File([blob], `${filename}.webm`, { type: 'video/webm' });
+        addToQueue([file]);
+    }
   };
 
-  const processVideo = async (blob, filename) => {
-    setIsConverting(true);
-    setProgress(0);
-    setStatus('Sedang Mengkonversi...');
+  const handleManualUpload = (e) => {
+      if (e.target.files && e.target.files.length > 0) {
+          addToQueue(Array.from(e.target.files));
+          // Reset value agar bisa upload ulang
+          e.target.value = ""; 
+      }
+  };
 
-    const ffmpeg = ffmpegRef.current;
-    const { fetchFile } = window.FFmpeg;
+  const addToQueue = (files) => {
+      const newItems = files.map(f => ({
+          id: Math.random().toString(36).substr(2, 9),
+          file: f,
+          name: f.name.replace(/\.[^/.]+$/, ""), // Nama tanpa ekstensi
+          status: 'pending'
+      }));
+      setQueue(prev => [...prev, ...newItems]);
+  };
 
-    // Timer simulasi progress (karena v0.10.1 single thread memblokir update UI real-time)
-    const timer = setInterval(() => {
-        setProgress((old) => {
-            if (old >= 95) return 95;
-            return old + 5;
-        });
-    }, 500);
+  const processQueue = async () => {
+      setIsProcessing(true);
+      const ffmpeg = ffmpegRef.current;
+      const { fetchFile } = window.FFmpeg;
 
-    try {
-        // 1. Tulis File
-        ffmpeg.FS('writeFile', 'input.webm', await fetchFile(blob));
-        
-        // 2. Jalankan Konversi (Rumus Stabilisasi)
-        // -r 30: Paksa 30fps agar tidak patah-patah
-        await ffmpeg.run('-i', 'input.webm', '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '28', '-r', '30', '-pix_fmt', 'yuv420p', 'output.mp4');
-        
-        // 3. Baca Hasil
-        const data = ffmpeg.FS('readFile', 'output.mp4');
-        
-        if (data.length === 0) throw new Error("File kosong");
+      // Loop cari item yang statusnya 'pending'
+      for (let i = 0; i < queue.length; i++) {
+          if (queue[i].status !== 'pending') continue; // Skip yang sudah selesai
 
-        const mp4Url = URL.createObjectURL(new Blob([data.buffer], { type: 'video/mp4' }));
+          setCurrentFileIndex(i);
+          const item = queue[i];
+          
+          // UPDATE STATUS UI: PROCESSING
+          setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, status: 'processing' } : q));
+          setStatusTitle(`Mengkonversi (${i + 1}/${queue.length})`);
+          setStatusDesc(`Sedang memproses: ${item.name}`);
+          setProgress(0);
 
-        // 4. Download
-        const a = document.createElement('a');
-        a.href = mp4Url;
-        a.download = `${filename}.mp4`; // Nama file output bersih (tanpa -converted)
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
+          // Simulasi Progress Visual
+          const timer = setInterval(() => {
+            setProgress((old) => (old >= 90 ? 90 : old + 5));
+          }, 500);
 
-        // 5. Bersihkan Memori
-        try {
-            ffmpeg.FS('unlink', 'input.webm');
-            ffmpeg.FS('unlink', 'output.mp4');
-        } catch(e) {}
+          try {
+              // 1. Tulis File
+              ffmpeg.FS('writeFile', 'input.webm', await fetchFile(item.file));
 
-        clearInterval(timer);
-        setIsConverting(false);
-        setProgress(100);
-        setIsSuccess(true);
-        setStatus('SELESAI! Silakan Upload Lagi.');
-        
-        // Reset input file agar bisa upload file yang sama jika perlu
-        const fileInput = document.getElementById('fileInput');
-        if (fileInput) fileInput.value = "";
+              // 2. Convert
+              await ffmpeg.run('-i', 'input.webm', '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '28', '-r', '30', '-pix_fmt', 'yuv420p', 'output.mp4');
 
-    } catch (err) {
-        clearInterval(timer);
-        console.error(err);
-        setIsConverting(false);
-        setIsError(true);
-        setStatus('Gagal Konversi. Pastikan file valid.');
-    }
+              // 3. Baca Hasil
+              const data = ffmpeg.FS('readFile', 'output.mp4');
+              const mp4Url = URL.createObjectURL(new Blob([data.buffer], { type: 'video/mp4' }));
+
+              // 4. Download
+              triggerDownload(mp4Url, `${item.name}.mp4`);
+
+              // 5. Cleanup
+              try {
+                  ffmpeg.FS('unlink', 'input.webm');
+                  ffmpeg.FS('unlink', 'output.mp4');
+              } catch(e) {}
+
+              // UPDATE STATUS UI: DONE
+              setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, status: 'done' } : q));
+
+          } catch (err) {
+              console.error(err);
+              // UPDATE STATUS UI: ERROR
+              setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, status: 'error' } : q));
+          } finally {
+              clearInterval(timer);
+              setProgress(0);
+              // Jeda sedikit antar file agar browser tidak hang
+              await new Promise(r => setTimeout(r, 1000));
+          }
+      }
+
+      setIsProcessing(false);
+      setStatusTitle('Semua Selesai!');
+      setStatusDesc('Semua antrian telah diproses.');
+      
+      // Auto Close jika ini dari single trigger dan semua sukses
+      // (Opsional, dimatikan untuk mode batch agar user bisa lihat list)
+      // setTimeout(() => window.close(), 5000);
+  };
+
+  const triggerDownload = (url, name) => {
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+  };
+
+  const backToShortnews = () => {
+      try {
+          if (window.opener && !window.opener.closed) window.opener.focus();
+          else alert("Silakan klik Tab Shortnews secara manual di atas ⬆️");
+      } catch (e) { alert("Silakan klik Tab Shortnews secara manual di atas ⬆️"); }
   };
 
   return (
     <div style={styles.container}>
         <div style={styles.card}>
             
-            {/* HEADER SIMPEL */}
-            <div style={styles.header}>
-                <div style={{fontSize: '48px', marginBottom:'10px'}}>
-                    {isSuccess ? '🎉' : isError ? '❌' : isConverting ? '⚙️' : '🎥'}
-                </div>
-                <h1 style={{...styles.title, color: isError ? 'red' : '#333'}}>
-                    {status}
-                </h1>
+            <div style={styles.iconWrapper}>
+                {isProcessing ? '⚙️' : isError ? '❌' : '📂'}
             </div>
 
-            {/* AREA PROGRESS BAR */}
-            {isConverting && (
-                <div style={styles.progressContainer}>
-                    <div style={styles.progressBarTrack}>
-                        <div style={{...styles.progressBarFill, width: `${progress}%`}}></div>
-                    </div>
-                    <p style={styles.progressText}>{progress}% Berjalan</p>
+            <h1 style={{...styles.title, color: isError ? '#d32f2f' : isProcessing ? '#0070f3' : '#333'}}>
+                {statusTitle}
+            </h1>
+            <p style={styles.description}>{statusDesc}</p>
+
+            {/* AREA LIST ANTRIAN */}
+            {queue.length > 0 && (
+                <div style={styles.queueContainer}>
+                    {queue.map((item, idx) => (
+                        <div key={item.id} style={{
+                            ...styles.queueItem, 
+                            borderLeft: item.status === 'processing' ? '4px solid #0070f3' : 
+                                        item.status === 'done' ? '4px solid #2e7d32' : 
+                                        item.status === 'error' ? '4px solid red' : '4px solid #ccc'
+                        }}>
+                            <div style={styles.queueName}>{item.name}</div>
+                            <div style={styles.queueStatus}>
+                                {item.status === 'pending' && '⏳'}
+                                {item.status === 'processing' && <span style={{color:'#0070f3'}}>{progress}%</span>}
+                                {item.status === 'done' && '✅'}
+                                {item.status === 'error' && '❌'}
+                            </div>
+                        </div>
+                    ))}
                 </div>
             )}
 
-            {/* TOMBOL UPLOAD BESAR (Hanya muncul jika Siap & Tidak sedang convert) */}
-            {isReady && !isConverting && (
+            {/* TOMBOL UPLOAD MULTIPLE */}
+            {!isProcessing && (
                 <div style={{marginTop: '20px'}}>
                     <label style={styles.uploadButton}>
                         <span style={{fontSize: '24px', display:'block', marginBottom:'8px'}}>📂</span>
-                        UPLOAD WEBM DI SINI
+                        {queue.length > 0 ? 'TAMBAH FILE LAGI' : 'UPLOAD BANYAK VIDEO'}
                         <input 
-                            id="fileInput"
                             type="file" 
                             accept="video/webm, video/mkv"
+                            multiple // <--- KUNCI MULTI SELECT
                             onChange={handleManualUpload}
                             style={{display:'none'}}
                         />
                     </label>
-                    <p style={styles.hint}>Otomatis download MP4 setelah selesai</p>
                 </div>
             )}
 
-            {/* Loading Awal */}
-            {!isReady && !isError && (
-                <div style={{marginTop: '30px', color: '#888'}}>
-                    Sedang menyiapkan mesin...
-                </div>
+            {/* TOMBOL CLEAR */}
+            {!isProcessing && queue.length > 0 && (
+                <button onClick={() => setQueue([])} style={styles.clearButton}>
+                    Bersihkan List
+                </button>
             )}
             
-            {/* Tombol Reset Error */}
-            {isError && (
-                <button 
-                    onClick={() => window.location.reload()}
-                    style={{marginTop:'20px', padding:'10px 20px', cursor:'pointer'}}
-                >
-                    Refresh Halaman
-                </button>
+            {/* LINK BALIK */}
+            {queue.length > 0 && queue.every(q => q.status === 'done') && (
+                <div style={{marginTop: '20px'}}>
+                    <span onClick={backToShortnews} style={styles.blinkingLink} className="blink-anim">
+                        Kembali ke Shortnews
+                    </span>
+                </div>
             )}
 
         </div>
+        <style>{`
+            @keyframes blinkText { 0% { opacity: 1; } 50% { opacity: 0.4; } 100% { opacity: 1; } }
+            .blink-anim { animation: blinkText 1.5s infinite ease-in-out; }
+        `}</style>
     </div>
   );
 }
 
 const styles = {
-    container: {
-        minHeight: '100vh',
-        display: 'flex',
-        justifyContent: 'center',
-        alignItems: 'center',
-        backgroundColor: '#f4f4f9',
-        fontFamily: "'Segoe UI', sans-serif",
-        padding: '20px',
-    },
-    card: {
-        backgroundColor: 'white',
-        padding: '40px',
-        borderRadius: '20px',
-        boxShadow: '0 10px 40px rgba(0,0,0,0.1)',
-        width: '100%',
-        maxWidth: '450px',
-        textAlign: 'center',
-    },
-    header: {
-        marginBottom: '20px',
-    },
-    title: {
-        margin: '0',
-        fontSize: '24px',
-        fontWeight: '800',
-        color: '#222',
-        textTransform: 'uppercase',
-        letterSpacing: '1px'
-    },
-    uploadButton: {
-        display: 'block',
-        backgroundColor: '#d32f2f', // Merah Shortnews
-        color: 'white',
-        padding: '40px 20px',
-        borderRadius: '16px',
-        cursor: 'pointer',
-        fontWeight: 'bold',
-        fontSize: '18px',
-        boxShadow: '0 8px 20px rgba(211, 47, 47, 0.3)',
-        transition: 'transform 0.1s, background 0.2s',
-        border: '2px dashed rgba(255,255,255,0.3)',
-    },
-    hint: {
-        marginTop: '15px',
-        fontSize: '12px',
-        color: '#999',
-    },
-    progressContainer: {
-        margin: '30px 0',
-    },
-    progressBarTrack: {
-        height: '12px',
-        backgroundColor: '#eee',
-        borderRadius: '6px',
-        overflow: 'hidden',
-    },
-    progressBarFill: {
-        height: '100%',
-        backgroundColor: '#0070f3',
-        transition: 'width 0.3s',
-    },
-    progressText: {
-        marginTop: '8px',
-        fontSize: '14px',
-        color: '#666',
-        fontWeight: 'bold'
-    }
+    container: { minHeight: '100vh', display: 'flex', justifyContent: 'center', alignItems: 'center', backgroundColor: '#f0f2f5', fontFamily: "sans-serif", padding: '20px' },
+    card: { backgroundColor: '#ffffff', borderRadius: '16px', boxShadow: '0 10px 30px rgba(0,0,0,0.08)', padding: '40px', width: '100%', maxWidth: '500px', textAlign: 'center', maxHeight: '90vh', overflowY: 'auto' },
+    iconWrapper: { fontSize: '48px', marginBottom: '20px' },
+    title: { margin: '0 0 10px 0', fontSize: '24px', fontWeight: '700' },
+    description: { margin: '0 0 20px 0', color: '#666', fontSize: '14px' },
+    
+    queueContainer: { textAlign: 'left', marginBottom: '20px', maxHeight: '200px', overflowY: 'auto', border: '1px solid #eee', borderRadius: '8px', padding: '5px' },
+    queueItem: { display: 'flex', justifyContent: 'space-between', padding: '10px', borderBottom: '1px solid #f0f0f0', fontSize: '13px', alignItems: 'center', backgroundColor: '#fafafa', marginBottom: '2px' },
+    queueName: { fontWeight: 'bold', color: '#333', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '80%' },
+    queueStatus: { fontWeight: 'bold' },
+
+    uploadButton: { display: 'block', backgroundColor: '#0070f3', color: 'white', padding: '20px', borderRadius: '12px', cursor: 'pointer', fontWeight: 'bold', fontSize: '16px', boxShadow: '0 4px 15px rgba(0, 112, 243, 0.3)', border: '2px dashed rgba(255,255,255,0.3)', transition: 'transform 0.1s', ':active': { transform: 'scale(0.98)' } },
+    clearButton: { marginTop: '10px', background: 'none', border: 'none', color: '#888', textDecoration: 'underline', cursor: 'pointer', fontSize: '12px' },
+    blinkingLink: { color: '#007bff', fontWeight: 'bold', textDecoration: 'underline', cursor: 'pointer', display: 'inline-block', padding: '5px 10px', borderRadius: '4px', backgroundColor: '#e3f2fd' },
 };
 
 export default App;
