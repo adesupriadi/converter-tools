@@ -7,7 +7,7 @@ function App() {
   const [statusDesc, setStatusDesc] = useState('Siap menerima video dari Shortnews.');
   
   // State untuk Multi-File
-  const [queue, setQueue] = useState([]); // Format: { id, file, status: 'pending'|'processing'|'done'|'error', name }
+  const [queue, setQueue] = useState([]); 
   const [isProcessing, setIsProcessing] = useState(false);
   const [currentFileIndex, setCurrentFileIndex] = useState(0);
   const [progress, setProgress] = useState(0);
@@ -23,7 +23,11 @@ function App() {
   // TRIGGER PROSES OTOMATIS JIKA ADA ANTRIAN BARU
   useEffect(() => {
     if (isReady && queue.length > 0 && !isProcessing) {
-        processQueue();
+        // Cek apakah ada yang statusnya masih 'pending'
+        const hasPending = queue.some(q => q.status === 'pending');
+        if (hasPending) {
+            processQueue();
+        }
     }
   }, [queue, isReady, isProcessing]);
 
@@ -66,7 +70,6 @@ function App() {
   const handleIncomingFile = async (event) => {
     if (event.data && event.data.type === 'VIDEO_DATA') {
         const { blob, filename } = event.data;
-        // Masukkan ke antrian sebagai File object
         const file = new File([blob], `${filename}.webm`, { type: 'video/webm' });
         addToQueue([file]);
     }
@@ -75,7 +78,6 @@ function App() {
   const handleManualUpload = (e) => {
       if (e.target.files && e.target.files.length > 0) {
           addToQueue(Array.from(e.target.files));
-          // Reset value agar bisa upload ulang
           e.target.value = ""; 
       }
   };
@@ -84,10 +86,19 @@ function App() {
       const newItems = files.map(f => ({
           id: Math.random().toString(36).substr(2, 9),
           file: f,
-          name: f.name.replace(/\.[^/.]+$/, ""), // Nama tanpa ekstensi
+          name: f.name.replace(/\.[^/.]+$/, ""),
           status: 'pending'
       }));
       setQueue(prev => [...prev, ...newItems]);
+  };
+
+  // FUNGSI BERSIHKAN LIST & RESET TAMPILAN
+  const clearQueue = () => {
+      setQueue([]);
+      setIsError(false);
+      // KEMBALIKAN KE TAMPILAN AWAL
+      setStatusTitle('Converter Ready!');
+      setStatusDesc('Upload banyak file sekaligus? Bisa!');
   };
 
   const processQueue = async () => {
@@ -95,55 +106,43 @@ function App() {
       const ffmpeg = ffmpegRef.current;
       const { fetchFile } = window.FFmpeg;
 
-      // Loop cari item yang statusnya 'pending'
       for (let i = 0; i < queue.length; i++) {
-          if (queue[i].status !== 'pending') continue; // Skip yang sudah selesai
+          if (queue[i].status !== 'pending') continue;
 
           setCurrentFileIndex(i);
           const item = queue[i];
           
-          // UPDATE STATUS UI: PROCESSING
           setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, status: 'processing' } : q));
           setStatusTitle(`Mengkonversi (${i + 1}/${queue.length})`);
           setStatusDesc(`Sedang memproses: ${item.name}`);
           setProgress(0);
 
-          // Simulasi Progress Visual
           const timer = setInterval(() => {
             setProgress((old) => (old >= 90 ? 90 : old + 5));
           }, 500);
 
           try {
-              // 1. Tulis File
               ffmpeg.FS('writeFile', 'input.webm', await fetchFile(item.file));
-
-              // 2. Convert
               await ffmpeg.run('-i', 'input.webm', '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '28', '-r', '30', '-pix_fmt', 'yuv420p', 'output.mp4');
-
-              // 3. Baca Hasil
+              
               const data = ffmpeg.FS('readFile', 'output.mp4');
               const mp4Url = URL.createObjectURL(new Blob([data.buffer], { type: 'video/mp4' }));
 
-              // 4. Download
               triggerDownload(mp4Url, `${item.name}.mp4`);
 
-              // 5. Cleanup
               try {
                   ffmpeg.FS('unlink', 'input.webm');
                   ffmpeg.FS('unlink', 'output.mp4');
               } catch(e) {}
 
-              // UPDATE STATUS UI: DONE
               setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, status: 'done' } : q));
 
           } catch (err) {
               console.error(err);
-              // UPDATE STATUS UI: ERROR
               setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, status: 'error' } : q));
           } finally {
               clearInterval(timer);
               setProgress(0);
-              // Jeda sedikit antar file agar browser tidak hang
               await new Promise(r => setTimeout(r, 1000));
           }
       }
@@ -151,10 +150,6 @@ function App() {
       setIsProcessing(false);
       setStatusTitle('Semua Selesai!');
       setStatusDesc('Semua antrian telah diproses.');
-      
-      // Auto Close jika ini dari single trigger dan semua sukses
-      // (Opsional, dimatikan untuk mode batch agar user bisa lihat list)
-      // setTimeout(() => window.close(), 5000);
   };
 
   const triggerDownload = (url, name) => {
@@ -164,13 +159,6 @@ function App() {
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
-  };
-
-  const backToShortnews = () => {
-      try {
-          if (window.opener && !window.opener.closed) window.opener.focus();
-          else alert("Silakan klik Tab Shortnews secara manual di atas ⬆️");
-      } catch (e) { alert("Silakan klik Tab Shortnews secara manual di atas ⬆️"); }
   };
 
   return (
@@ -217,7 +205,7 @@ function App() {
                         <input 
                             type="file" 
                             accept="video/webm, video/mkv"
-                            multiple // <--- KUNCI MULTI SELECT
+                            multiple 
                             onChange={handleManualUpload}
                             style={{display:'none'}}
                         />
@@ -225,27 +213,14 @@ function App() {
                 </div>
             )}
 
-            {/* TOMBOL CLEAR */}
+            {/* TOMBOL CLEAR - UPDATE: RESET STATE */}
             {!isProcessing && queue.length > 0 && (
-                <button onClick={() => setQueue([])} style={styles.clearButton}>
+                <button onClick={clearQueue} style={styles.clearButton}>
                     Bersihkan List
                 </button>
             )}
             
-            {/* LINK BALIK */}
-            {queue.length > 0 && queue.every(q => q.status === 'done') && (
-                <div style={{marginTop: '20px'}}>
-                    <span onClick={backToShortnews} style={styles.blinkingLink} className="blink-anim">
-                        Kembali ke Shortnews
-                    </span>
-                </div>
-            )}
-
         </div>
-        <style>{`
-            @keyframes blinkText { 0% { opacity: 1; } 50% { opacity: 0.4; } 100% { opacity: 1; } }
-            .blink-anim { animation: blinkText 1.5s infinite ease-in-out; }
-        `}</style>
     </div>
   );
 }
@@ -264,7 +239,6 @@ const styles = {
 
     uploadButton: { display: 'block', backgroundColor: '#0070f3', color: 'white', padding: '20px', borderRadius: '12px', cursor: 'pointer', fontWeight: 'bold', fontSize: '16px', boxShadow: '0 4px 15px rgba(0, 112, 243, 0.3)', border: '2px dashed rgba(255,255,255,0.3)', transition: 'transform 0.1s', ':active': { transform: 'scale(0.98)' } },
     clearButton: { marginTop: '10px', background: 'none', border: 'none', color: '#888', textDecoration: 'underline', cursor: 'pointer', fontSize: '12px' },
-    blinkingLink: { color: '#007bff', fontWeight: 'bold', textDecoration: 'underline', cursor: 'pointer', display: 'inline-block', padding: '5px 10px', borderRadius: '4px', backgroundColor: '#e3f2fd' },
 };
 
 export default App;
