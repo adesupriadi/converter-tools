@@ -1,7 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
 
-// VERSI FINAL VERCEL (v0.9.8)
-
 function App() {
   const [statusTitle, setStatusTitle] = useState('Menunggu Koneksi...');
   const [statusDesc, setStatusDesc] = useState('Siap menerima video dari Shortnews.');
@@ -22,38 +20,38 @@ function App() {
     try {
       if (!window.FFmpeg) {
         setStatusTitle("Gagal Memuat Sistem");
-        setStatusDesc("Script FFmpeg hilang. Cek index.html");
+        setStatusDesc("Script FFmpeg tidak ditemukan. Cek index.html");
         setIsError(true);
         return;
       }
 
-      setStatusTitle('Memanaskan Mesin...');
-      setStatusDesc('Sedang menyiapkan mesin Vercel (v0.9.8)...');
+      setStatusTitle('Memanaskan Mesin (v0.10.1)...');
+      setStatusDesc('Sedang menyiapkan FFmpeg di browser Anda.');
       
       const { createFFmpeg } = window.FFmpeg;
       
-      // --- KUNCI SUKSES DI VERCEL ---
-      // Gunakan Core v0.9.0 (Single Threaded)
+      // SETTINGAN V0.10.1 YANG BENAR
       const ffmpeg = createFFmpeg({ 
         log: true,
-        corePath: 'https://unpkg.com/@ffmpeg/core@0.9.0/dist/ffmpeg-core.js'
+        // Core Path wajib v0.10.0 (Pasangan v0.10.1)
+        corePath: 'https://unpkg.com/@ffmpeg/core@0.10.0/dist/ffmpeg-core.js'
       }); 
-      // ------------------------------
       
       ffmpegRef.current = ffmpeg;
       await ffmpeg.load();
       
       setStatusTitle('Converter Siap!');
-      setStatusDesc('Menunggu kiriman file otomatis...');
+      setStatusDesc('Menunggu kiriman file otomatis dari tab sebelah...');
 
       if (window.opener) {
         try { window.opener.postMessage('CONVERTER_READY', '*'); } catch (e) {}
       }
+
       window.addEventListener('message', handleIncomingFile);
 
       timeoutRef.current = setTimeout(() => {
           setStatusTitle('⚠️ KONEKSI GAGAL');
-          setStatusDesc('Waktu habis. Silakan upload manual di bawah.');
+          setStatusDesc('Waktu habis. File tidak masuk otomatis. Silakan upload manual di bawah.');
           setIsError(true);
       }, 10000);
 
@@ -86,24 +84,27 @@ function App() {
     setIsConverting(true);
     setProgress(0);
     setStatusTitle('Sedang Mengkonversi...');
-    setStatusDesc('Mohon tunggu sebentar...');
+    setStatusDesc('Mohon jangan tutup tab ini.');
 
     const ffmpeg = ffmpegRef.current;
-    const { fetchFile } = window.FFmpeg;
+    const { fetchFile } = window.FFmpeg; // v0.10 ambil fetchFile dari sini
 
+    // Simulasi Progress Visual
     const timer = setInterval(() => {
-        setProgress((old) => (old >= 95 ? 95 : old + 5));
+        setProgress((old) => (old >= 95 ? 95 : old + 2));
     }, 500);
 
     try {
         ffmpeg.FS('writeFile', 'input.webm', await fetchFile(blob));
         
-        // Command v0.9.8 (Sama persis)
-        await ffmpeg.run('-i', 'input.webm', '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '28', 'output.mp4');
+        // RUMUS STABILISASI (v0.10 syntax)
+        await ffmpeg.run('-i', 'input.webm', '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '28', '-r', '30', '-pix_fmt', 'yuv420p', 'output.mp4');
         
         const data = ffmpeg.FS('readFile', 'output.mp4');
-        const mp4Url = URL.createObjectURL(new Blob([data.buffer], { type: 'video/mp4' }));
+        
+        if (data.length === 0) throw new Error("File output kosong.");
 
+        const mp4Url = URL.createObjectURL(new Blob([data.buffer], { type: 'video/mp4' }));
         triggerDownload(mp4Url, `${filename}.mp4`);
 
         try {
@@ -117,10 +118,10 @@ function App() {
         setIsSuccess(true);
         setStatusTitle('Selesai!');
         
-        setStatusDesc('Tab akan tertutup dalam 3 detik...');
+        setStatusDesc('Tab ini akan tertutup otomatis dalam 3 detik...');
         setTimeout(() => {
-            try { if (window.opener) window.opener.focus(); } catch(e) {}
-            window.close();
+            try { if (window.opener && !window.opener.closed) window.opener.focus(); } catch (e) {}
+            window.close(); 
         }, 3000);
 
     } catch (err) {
@@ -129,7 +130,7 @@ function App() {
         setIsConverting(false);
         setIsError(true);
         setStatusTitle('Gagal Konversi');
-        setStatusDesc('Terjadi kesalahan. Cek Console.');
+        setStatusDesc('Error: ' + err.message);
     }
   };
 
@@ -190,7 +191,7 @@ function App() {
             )}
 
             {isSuccess && (
-                <button onClick={() => { setIsSuccess(false); setStatusTitle('Siap'); setProgress(0); }} style={styles.resetButton}>
+                <button onClick={() => { setIsSuccess(false); setStatusTitle('Siap'); setProgress(0); setIsError(false); }} style={styles.resetButton}>
                     🔄 Convert Lagi
                 </button>
             )}
