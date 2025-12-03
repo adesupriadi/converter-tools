@@ -23,23 +23,23 @@ function App() {
     try {
       if (!window.FFmpeg) {
         setStatusTitle("Gagal Memuat Sistem");
-        setStatusDesc("Script FFmpeg tidak ditemukan. Cek index.html");
+        setStatusDesc("Script FFmpeg hilang. Cek index.html");
         setIsError(true);
         return;
       }
 
-      setStatusTitle('Memanaskan Mesin...');
-      setStatusDesc('Sedang menyiapkan mesin Single-Threaded (v0.11)...');
+      setStatusTitle('Memanaskan Mesin (v0.10.0)...');
+      setStatusDesc('Sedang menyiapkan mesin yang paling kompatibel.');
       
       const { createFFmpeg } = window.FFmpeg;
       
-      // --- SOLUSI BAD MEMORY: GUNAKAN CORE-ST (Single Threaded) ---
-      // Ini mesin khusus yang tidak butuh SharedArrayBuffer sama sekali
+      // --- KUNCI SUKSES: VERSI 0.10.0 (MATCHING) ---
       const ffmpeg = createFFmpeg({ 
         log: true,
-        corePath: 'https://unpkg.com/@ffmpeg/core-st@0.11.1/dist/ffmpeg-core.js'
+        // Core Path WAJIB v0.10.0 juga
+        corePath: 'https://unpkg.com/@ffmpeg/core@0.10.0/dist/ffmpeg-core.js'
       }); 
-      // -----------------------------------------------------------
+      // ---------------------------------------------
       
       ffmpegRef.current = ffmpeg;
       await ffmpeg.load();
@@ -53,10 +53,18 @@ function App() {
       }
       window.addEventListener('message', handleIncomingFile);
 
+      // Timeout 10 detik
+      timeoutRef.current = setTimeout(() => {
+          setStatusTitle('⚠️ KONEKSI GAGAL');
+          setStatusDesc('Waktu habis. Silakan upload manual di bawah.');
+          setIsError(true);
+      }, 10000);
+
     } catch (err) {
       console.error(err);
       setStatusTitle('Gagal Inisialisasi');
-      setStatusDesc('Error: ' + (err.message || "Cek Koneksi Internet"));
+      // Tampilkan pesan error asli agar kita tahu
+      setStatusDesc('Error: ' + (err.message || "Crash Memory"));
       setIsError(true);
     }
   };
