@@ -21,7 +21,6 @@ function App() {
 
   const initEngine = async () => {
     try {
-      // 1. Cek apakah Script Global FFmpeg v0.9.8 sudah termuat
       if (!window.FFmpeg) {
         setStatusTitle("Gagal Memuat Sistem");
         setStatusDesc("Script FFmpeg tidak ditemukan. Cek index.html");
@@ -30,25 +29,29 @@ function App() {
       }
 
       setStatusTitle('Memanaskan Mesin...');
-      setStatusDesc('Sedang menyiapkan mesin v0.9.8...');
+      setStatusDesc('Sedang menyiapkan mesin Single-Threaded (v0.11)...');
       
       const { createFFmpeg } = window.FFmpeg;
       
-      // 2. CONFIGURATION ANTI-GAGAL (SOLUSI NETLIFY)
-      // Kita paksa corePath ke versi 0.9.0 di CDN.
-      // Ini mencegah error 404 karena Netlify tidak punya file .wasm di foldernya.
+      // --- SOLUSI BAD MEMORY: GUNAKAN CORE-ST (Single Threaded) ---
+      // Ini mesin khusus yang tidak butuh SharedArrayBuffer sama sekali
       const ffmpeg = createFFmpeg({ 
         log: true,
-        corePath: 'https://unpkg.com/@ffmpeg/core@0.9.0/dist/ffmpeg-core.js'
+        corePath: 'https://unpkg.com/@ffmpeg/core-st@0.11.1/dist/ffmpeg-core.js'
       }); 
+      // -----------------------------------------------------------
       
       ffmpegRef.current = ffmpeg;
-
-      // 3. Load Engine
       await ffmpeg.load();
       
-      // 4. Siap
-      setIsReadyState();
+      setIsReady(true);
+      setStatusTitle('WEBM2MP4 SIAP'); 
+      setStatusDesc('Silakan upload video Anda.');
+
+      if (window.opener) {
+        try { window.opener.postMessage('CONVERTER_READY', '*'); } catch (e) {}
+      }
+      window.addEventListener('message', handleIncomingFile);
 
     } catch (err) {
       console.error(err);
