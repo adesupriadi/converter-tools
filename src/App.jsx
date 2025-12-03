@@ -1,8 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
 
-// PENTING: Pastikan file 'index.html' kamu memuat script FFmpeg v0.9.8
-// dan memiliki script Polyfill SharedArrayBuffer.
-
 function App() {
   const [statusTitle, setStatusTitle] = useState('Menunggu Koneksi...');
   const [statusDesc, setStatusDesc] = useState('Siap menerima video dari Shortnews.');
@@ -21,30 +18,55 @@ function App() {
 
   const initEngine = async () => {
     try {
-      if (!window.FFmpeg) {
+      // 1. CEK LIBRARY GLOBAL (Nama globalnya FFmpegWASM dan FFmpegUtil)
+      if (!window.FFmpegWASM || !window.FFmpegUtil) {
         setStatusTitle("Gagal Memuat Sistem");
-        setStatusDesc("Script FFmpeg hilang. Cek index.html");
+        setStatusDesc("Script FFmpeg tidak ditemukan. Cek index.html");
         setIsError(true);
         return;
       }
 
-      setStatusTitle('Memanaskan Mesin (v0.10.0)...');
-      setStatusDesc('Sedang menyiapkan mesin yang paling kompatibel.');
+      setStatusTitle('Memanaskan Mesin v0.12...');
+      setStatusDesc('Sedang menyiapkan mesin Single-Threaded...');
       
-      const { createFFmpeg } = window.FFmpeg;
+      // AMBIL DARI GLOBAL (UMD)
+      const { FFmpeg } = window.FFmpegWASM;
+      const { fetchFile, toBlobURL } = window.FFmpegUtil;
       
-      // --- KUNCI SUKSES: VERSI 0.10.0 (MATCHING) ---
-      const ffmpeg = createFFmpeg({ 
-        log: true,
-        // Core Path WAJIB v0.10.0 juga
-        corePath: 'https://unpkg.com/@ffmpeg/core@0.10.0/dist/ffmpeg-core.js'
-      }); 
-      // ---------------------------------------------
-      
+      const ffmpeg = new FFmpeg();
       ffmpegRef.current = ffmpeg;
-      await ffmpeg.load();
+
+      // Log Progress
+      ffmpeg.on('log', ({ message }) => console.log(message));
+      ffmpeg.on('progress', ({ progress }) => {
+          // v0.12 progress-nya 0-1, jadi dikali 100
+          setProgress(Math.round(progress * 100));
+      });
+
+      // 2. LOAD ENGINE DENGAN BLOB (Solusi Anti Gagal Import)
+      const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd';
       
-      setIsReady(true);
+      // Kita download dulu filenya jadi Blob lokal supaya tidak kena blokir
+      const coreURL = await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript');
+      const wasmURL = await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm');
+
+      await ffmpeg.load({
+        coreURL: coreURL,
+        wasmURL: wasmURL,
+        // v0.12 Single Threaded tidak butuh workerURL tambahan
+      });
+      
+      setIsReadyState();
+
+    } catch (err) {
+      console.error(err);
+      setStatusTitle('Gagal Inisialisasi');
+      setStatusDesc('Error: ' + (err.message || "Cek Koneksi Internet"));
+      setIsError(true);
+    }
+  };
+
+  const setIsReadyState = () => {
       setStatusTitle('WEBM2MP4 SIAP'); 
       setStatusDesc('Silakan upload video Anda.');
 
@@ -53,35 +75,6 @@ function App() {
       }
       window.addEventListener('message', handleIncomingFile);
 
-      // Timeout 10 detik
-      timeoutRef.current = setTimeout(() => {
-          setStatusTitle('⚠️ KONEKSI GAGAL');
-          setStatusDesc('Waktu habis. Silakan upload manual di bawah.');
-          setIsError(true);
-      }, 10000);
-
-    } catch (err) {
-      console.error(err);
-      setStatusTitle('Gagal Inisialisasi');
-      // Tampilkan pesan error asli agar kita tahu
-      setStatusDesc('Error: ' + (err.message || "Crash Memory"));
-      setIsError(true);
-    }
-  };
-
-  const setIsReadyState = () => {
-      setStatusTitle('WEBM2MP4 SIAP'); 
-      setStatusDesc('Silakan upload video Anda (Otomatis/Manual).');
-
-      // Kabari tab Shortnews (Jika dibuka via popup)
-      if (window.opener) {
-        try { window.opener.postMessage('CONVERTER_READY', '*'); } catch (e) {}
-      }
-      
-      // Pasang telinga untuk file otomatis
-      window.addEventListener('message', handleIncomingFile);
-
-      // Timer Timeout (Jika file tidak masuk otomatis dalam 10 detik)
       timeoutRef.current = setTimeout(() => {
           setStatusTitle('⚠️ KONEKSI GAGAL');
           setStatusDesc('Waktu habis. Silakan upload manual di bawah.');
@@ -100,12 +93,8 @@ function App() {
   const handleManualUpload = (e) => {
       const file = e.target.files[0];
       if (!file) return;
-      
-      // Reset state sebelum mulai
       clearTimeout(timeoutRef.current);
-      setIsSuccess(false); 
-      setIsError(false);
-      
+      setIsSuccess(false); setIsError(false);
       processVideo(file, file.name.replace(/\.[^/.]+$/, "")); 
   };
 
@@ -113,69 +102,49 @@ function App() {
     setIsConverting(true);
     setProgress(0);
     setStatusTitle('Sedang Mengkonversi...');
-    setStatusDesc('Mohon tunggu, sedang menstabilkan video...');
+    setStatusDesc('Mohon tunggu sebentar...');
 
     const ffmpeg = ffmpegRef.current;
-    const { fetchFile } = window.FFmpeg;
-
-    // Simulasi progress bar (karena v0.9.8 single thread memblokir update UI real-time)
-    const timer = setInterval(() => {
-        setProgress((old) => (old >= 95 ? 95 : old + 5));
-    }, 500);
+    
+    // PENTING: Ambil fetchFile dari FFmpegUtil
+    const { fetchFile } = window.FFmpegUtil;
 
     try {
-        // A. Tulis File ke Memori Virtual
-        ffmpeg.FS('writeFile', 'input.webm', await fetchFile(blob));
+        // Tulis File
+        await ffmpeg.writeFile('input.webm', await fetchFile(blob));
         
-        // B. Jalankan Konversi (FFmpeg v0.9.8 Syntax)
-        // Parameter lengkap untuk hasil terbaik & kompatibel di HP
-        await ffmpeg.run(
-            '-i', 'input.webm', 
-            '-r', '30',             // FPS Stabil 30
-            '-c:v', 'libx264',      // Codec MP4
-            '-preset', 'ultrafast', // Cepat
-            '-crf', '28',           // Kompresi
-            '-pix_fmt', 'yuv420p',  // Format warna wajib untuk HP
-            '-movflags', '+faststart', 
-            'output.mp4'
-        );
+        // Convert (Command v0.12)
+        await ffmpeg.exec(['-i', 'input.webm', '-c:v', 'libx264', '-preset', 'ultrafast', 'output.mp4']);
         
-        // C. Baca Hasil
-        const data = ffmpeg.FS('readFile', 'output.mp4');
-        
-        if (data.length === 0) throw new Error("File output kosong.");
-
+        // Baca Hasil
+        const data = await ffmpeg.readFile('output.mp4');
         const mp4Url = URL.createObjectURL(new Blob([data.buffer], { type: 'video/mp4' }));
 
-        // D. Download
         triggerDownload(mp4Url, `${filename}.mp4`);
 
-        // E. Bersihkan Memori
+        // Hapus Memory (v0.12 pakai deleteFile)
         try {
-            ffmpeg.FS('unlink', 'input.webm');
-            ffmpeg.FS('unlink', 'output.mp4');
+            await ffmpeg.deleteFile('input.webm');
+            await ffmpeg.deleteFile('output.mp4');
         } catch(e) {}
 
-        clearInterval(timer);
         setIsConverting(false);
         setProgress(100);
         setIsSuccess(true);
         setStatusTitle('Selesai!');
+        setStatusDesc('Tab akan tertutup otomatis...');
         
-        // F. Auto Close Logic
-        setStatusDesc('Tab ini akan tertutup otomatis dalam 3 detik...');
         setTimeout(() => {
-            try { if (window.opener && !window.opener.closed) window.opener.focus(); } catch (e) {}
+            try { if (window.opener) window.opener.focus(); } catch(e) {}
             window.close();
         }, 3000);
 
     } catch (err) {
-        clearInterval(timer);
         console.error(err);
         setIsConverting(false);
         setIsError(true);
         setStatusTitle('Gagal Konversi');
-        setStatusDesc('Error: ' + (err.message || "Terjadi kesalahan teknis"));
+        setStatusDesc('Error: ' + err.message);
     }
   };
 
@@ -185,11 +154,11 @@ function App() {
       document.body.appendChild(a); a.click(); document.body.removeChild(a);
   };
 
+  // ... (Bagian render return sama persis dengan sebelumnya)
+  // Gunakan render yang sama dari kode sebelumnya
+  
   const backToShortnews = () => {
-      try {
-          if (window.opener && !window.opener.closed) window.opener.focus();
-          else alert("Silakan klik Tab Shortnews secara manual.");
-      } catch (e) { alert("Silakan klik Tab Shortnews secara manual."); }
+    try { if (window.opener) window.opener.focus(); else alert("Silakan kembali manual"); } catch (e) { alert("Silakan kembali manual"); }
   };
 
   return (
@@ -230,7 +199,7 @@ function App() {
                     <div style={styles.arrowAnim}>⬇️</div>
                     <label style={styles.uploadButton}>
                         📁 Upload File WebM
-                        <input id="fileInput" type="file" accept="video/webm, video/mkv" onChange={handleManualUpload} style={{display:'none'}} />
+                        <input type="file" accept="video/webm, video/mkv" onChange={handleManualUpload} style={{display:'none'}} />
                     </label>
                 </div>
             )}
